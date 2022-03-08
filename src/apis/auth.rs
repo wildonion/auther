@@ -23,53 +23,39 @@ use actix_web::{Error, HttpRequest, HttpResponse, Result, get, post, web};
 
 
 
-
 #[post("/check-token")]
-async fn check_token(req: HttpRequest, token_request: web::Json<schemas::auth::CheckTokenRequest>) -> Result<HttpResponse, Error>{
+async fn check_token(req: HttpRequest) -> Result<HttpResponse, Error>{
     
-    let conn = utils::db::connection().await;
-    let app_storage = match conn.as_ref().unwrap().db.as_ref().unwrap().mode{ //-- here as_ref() method convert &Option<T> to Option<&T>
-        ctx::app::Mode::On => conn.as_ref().as_ref().unwrap().db.as_ref().unwrap().instance.as_ref(), //-- return the db if it wasn't detached - instance.as_ref() will return the Option<&Client>
-        ctx::app::Mode::Off => None, //-- no db is available cause it's off
-    };
-
-    let token_request = token_request.into_inner(); //-- into_inner() will deconstruct to an inner value and return T    
-    match utils::jwt::deconstruct(token_request.access_token.as_str()).await{
-        Ok(decoded_token) => {
-            
-            
-            let _id = decoded_token.claims._id;
-            let username = decoded_token.claims.username;
-            let greeting = format!("Welcome {}", username);
-            
-
-            let response_body = ctx::app::Response::<String>{ //-- we have to specify a generic type for data field in Response struct which in our case is String type
-                data: Some(greeting), //-- deserialize_from_json_into_struct is of type UserInfo struct 
+    match middlewares::auth::pass(req).await{
+        Ok(token_data) => { //-- claims contains _id, username, iat and exp
+            let user_id = token_data.claims._id; //-- this is the mongodb ObjectId as BSON
+            let username = token_data.claims.username;
+            let response_body = ctx::app::Response::<ctx::app::Nill>{
+                data: Some(ctx::app::Nill(&[])), //-- data is an empty &[u8] array
                 message: ACCESS_GRANTED,
                 status: 200,
             };
             Ok(
-                HttpResponse::Ok().json(
+                HttpResponse::Unauthorized().json(
                     response_body
                 ).into_body()
             )
         },
-        Err(e) => { //-- this is the error of can't decode the token
+        Err(e) => {
             let response_body = ctx::app::Response::<ctx::app::Nill>{
                 data: Some(ctx::app::Nill(&[])), //-- data is an empty &[u8] array
                 message: &e.to_string(), //-- take a reference to the string error
-                status: 500,
+                status: 401,
             };
             Ok(
-                HttpResponse::InternalServerError().json(
+                HttpResponse::Unauthorized().json(
                     response_body
                 ).into_body()
             )
-        },
+        }
     }
-
+    
 }
-
 
 #[get("/login")]
 async fn login(req: HttpRequest, user_info: web::Json<schemas::auth::LoginRequest>) -> Result<HttpResponse, Error>{
