@@ -8,6 +8,7 @@
 use crate::contexts as ctx;
 use crate::schemas;
 use crate::constants::*;
+use crate::middlewares;
 use crate::utils;
 use futures::{executor::block_on, TryFutureExt, TryStreamExt}; //-- based on orphan rule TryStreamExt trait is required to use try_next() method on the future object which is solved by .await - try_next() is used on futures stream or chunks to get the next future IO stream
 use bytes::Buf; //-- based on orphan rule it'll be needed to call the reader() method on the whole_body buffer
@@ -30,16 +31,48 @@ async fn check_token(req: HttpRequest) -> Result<HttpResponse, Error>{
         Ok(token_data) => { //-- claims contains _id, username, iat and exp
             let user_id = token_data.claims._id; //-- this is the mongodb ObjectId as BSON
             let username = token_data.claims.username;
-            let response_body = ctx::app::Response::<ctx::app::Nill>{
-                data: Some(ctx::app::Nill(&[])), //-- data is an empty &[u8] array
-                message: ACCESS_GRANTED,
-                status: 200,
+
+            let conn = utils::db::connection().await;
+            let app_storage = match conn.as_ref().unwrap().db.as_ref().unwrap().mode{ //-- here as_ref() method convert &Option<T> to Option<&T>
+                ctx::app::Mode::On => conn.as_ref().as_ref().unwrap().db.as_ref().unwrap().instance.as_ref(), //-- return the db if it wasn't detached - instance.as_ref() will return the Option<&Client>
+                ctx::app::Mode::Off => None, //-- no db is available cause it's off
             };
-            Ok(
-                HttpResponse::Unauthorized().json(
-                    response_body
-                ).into_body()
-            )
+
+            let users = app_storage.unwrap().database("bitrader").collection::<schemas::auth::UserInfo>("users"); //-- selecting users collection to fetch all user infos into the UserInfo struct
+            match users.find_one(doc!{"_id": user_id.unwrap()}, None).unwrap(){ //-- finding user based on his/her id which has been decoded from the jwt
+                Some(user_doc) => {
+                    let user_info = schemas::auth::CheckTokenResponse{
+                        _id: user_id, //-- user id decoded from jwt
+                        username: user_doc.username,
+                        phone: user_doc.phone,
+                        role: user_doc.role,
+                        status: user_doc.status,
+                        created_at: user_doc.created_at,
+                    };
+                    let response_body = ctx::app::Response::<schemas::auth::CheckTokenResponse>{
+                        data: Some(user_info),
+                        message: ACCESS_GRANTED,
+                        status: 200,
+                    };
+                    Ok(
+                        HttpResponse::Unauthorized().json(
+                            response_body
+                        ).into_body()
+                    )
+                },
+                None => { //-- means we didn't find any document related to this username and we have to tell the user do a signup
+                    let response_body = ctx::app::Response::<ctx::app::Nill>{ //-- we have to specify a generic type for data field in Response struct which in our case is Nill struct
+                        data: Some(ctx::app::Nill(&[])), //-- data is an empty &[u8] array
+                        message: DO_SIGNUP, //-- document not found in database and the user must do a signup
+                        status: 404,
+                    };
+                    Ok(
+                        HttpResponse::NotFound().json(
+                            response_body
+                        ).into_body()
+                    )
+                }
+            }  
         },
         Err(e) => {
             let response_body = ctx::app::Response::<ctx::app::Nill>{
@@ -56,6 +89,7 @@ async fn check_token(req: HttpRequest) -> Result<HttpResponse, Error>{
     }
     
 }
+
 
 #[get("/login")]
 async fn login(req: HttpRequest, user_info: web::Json<schemas::auth::LoginRequest>) -> Result<HttpResponse, Error>{
