@@ -29,4 +29,4 @@ pub static UNAUTHORISED: &str = "Unauthorised";
 pub static DEV_LEVEL: &u8 = &0; //-- DEV_LEVEL is of type &u8 so we have to set its value like &0
 pub static ADMIN_LEVEL: &u8 = &1;
 pub static USER_LEVEL: &u8 = &2;
-pub static TRADER_LEVEL: &u8 = &3;
+pub static IGNORE_ROUTES: &[&str] = &["login", "signup"];
